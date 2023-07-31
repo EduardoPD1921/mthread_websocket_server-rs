@@ -1,4 +1,16 @@
 use std::{net::TcpStream, io::{self, Write}};
+use serde::Serialize;
+
+#[derive(Serialize, Debug)]
+struct Message {
+    data: Vec<u8>
+}
+
+impl Message {
+    fn new(data: Vec<u8>) -> Message {
+        Message { data }
+    }
+}
 
 fn main() {
     let addr = format!("127.0.0.1:{}", 3000);
@@ -10,10 +22,13 @@ fn main() {
     let stdin = io::stdin();
 
     loop {
-        // TODO implement frames to dynamically allocate buffers on server side
         user_input.clear();
         stdin.read_line(&mut user_input).unwrap();
 
-        stream.write(user_input.as_bytes()).unwrap();
+        let message_data = user_input.as_bytes().to_vec();
+        let frame = Message::new(message_data);
+
+        let serialized_message = serde_json::to_string(&frame).unwrap();
+        writeln!(stream, "{}", serialized_message).unwrap();
     }
 }

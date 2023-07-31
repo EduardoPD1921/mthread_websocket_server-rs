@@ -1,7 +1,9 @@
-use std::io::Read;
+use std::io::{BufReader, BufRead};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::sync::{Arc, Mutex};
+
+use serde::Deserialize;
 
 struct Client {
     stream: TcpStream,
@@ -12,6 +14,11 @@ impl Client {
     fn new(stream: TcpStream, is_thread_active: bool) -> Client {
         Client { stream, is_thread_active  }
     }
+}
+
+#[derive(Deserialize, Debug)]
+struct Message {
+    data: Vec<u8>
 }
 
 fn main() {
@@ -48,13 +55,17 @@ fn receive_client_connection(listener: TcpListener, clients_vec: Arc<Mutex<Vec<C
     }
 }
 
-fn watch_client_stream(mut stream: TcpStream) {
+fn watch_client_stream(stream: TcpStream) {
     loop {
-        let mut msg_buffer: [u8; 1024] = [0; 1024];
-        match stream.read(&mut msg_buffer) {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut message_string: String = Default::default();
+
+        match reader.read_line(&mut message_string) {
             Ok(len) => {
                 if len > 0 {
-                    let client_msg = String::from_utf8_lossy(&msg_buffer);
+                    let message: Message = serde_json::from_str(&message_string).unwrap();
+                    let client_msg = String::from_utf8_lossy(&message.data);
+
                     println!("Message: {} from addr: {}", client_msg, stream.peer_addr().unwrap());
                 }
             },
