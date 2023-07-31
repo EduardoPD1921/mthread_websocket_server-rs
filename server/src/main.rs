@@ -21,6 +21,8 @@ struct Message {
     data: Vec<u8>
 }
 
+static mut THREADS_COUNTER: i32 = 0;
+
 fn main() {
     let addr = format!("127.0.0.1:{}", 3000);
     let listener = TcpListener::bind(&addr).unwrap();
@@ -55,25 +57,45 @@ fn receive_client_connection(listener: TcpListener, clients_vec: Arc<Mutex<Vec<C
     }
 }
 
-fn watch_client_stream(stream: TcpStream) {
+fn watch_client_stream(stream: TcpStream, clients_vec: Arc<Mutex<Vec<Client>>>) {
+    unsafe {
+        THREADS_COUNTER += 1;
+        println!("Threads counter: {}", THREADS_COUNTER);
+    }
+
     loop {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut message_string: String = Default::default();
 
         match reader.read_line(&mut message_string) {
-            Ok(len) => {
-                if len > 0 {
-                    let message: Message = serde_json::from_str(&message_string).unwrap();
-                    let client_msg = String::from_utf8_lossy(&message.data);
+            Ok(0) => {
+                println!("User {} disconnected", stream.peer_addr().unwrap());
+                disconnect_client(stream, clients_vec);
+                break;
+            },
+            Ok(_) => {
+                let message: Message = serde_json::from_str(&message_string).unwrap();
+                let client_msg = String::from_utf8_lossy(&message.data);
 
-                    println!("Message: {} from addr: {}", client_msg, stream.peer_addr().unwrap());
-                }
+                println!("Message: {} from addr: {}", client_msg, stream.peer_addr().unwrap());
             },
             Err(e) => {
                 eprintln!("Some error occurred: {}", e.to_string());
                 break;
             }
         }
+    }
+}
+
+fn disconnect_client(stream: TcpStream, clients_vec: Arc<Mutex<Vec<Client>>>) {
+    let mut locked_clients_vec = clients_vec.lock().unwrap();
+
+    let client_index = locked_clients_vec.iter().position(|c| c.stream.peer_addr().unwrap() == stream.peer_addr().unwrap()).unwrap();
+    locked_clients_vec.remove(client_index);
+
+    unsafe {
+        THREADS_COUNTER -= 1;
+        println!("Threads counter: {}", THREADS_COUNTER);
     }
 }
 
@@ -84,7 +106,8 @@ fn watch_clients(clients_vec: Arc<Mutex<Vec<Client>>>) {
             client.is_thread_active = true;
             let client_stream_clone = client.stream.try_clone().unwrap();
 
-            thread::spawn(move || watch_client_stream(client_stream_clone));
+            let clients_vec_clone = Arc::clone(&clients_vec);
+            thread::spawn(move || watch_client_stream(client_stream_clone, clients_vec_clone));
         }
     }
 }
