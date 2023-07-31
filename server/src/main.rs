@@ -50,44 +50,30 @@ fn receive_client_connection(listener: TcpListener, clients_vec: Arc<Mutex<Vec<C
 
 fn watch_client_stream(mut stream: TcpStream) {
     loop {
-        // let mut bytes_vec: Vec<u8> = Default::default();
-        let mut msg_from_client: String = Default::default();
-        match stream.read_to_string(&mut msg_from_client) {
-            Ok(res) => {
-                if res > 0 {
-                    println!("usize: {}", res);
+        let mut msg_buffer: [u8; 1024] = [0; 1024];
+        match stream.read(&mut msg_buffer) {
+            Ok(len) => {
+                if len > 0 {
+                    let client_msg = String::from_utf8_lossy(&msg_buffer);
+                    println!("Message: {} from addr: {}", client_msg, stream.peer_addr().unwrap());
                 }
-                // println!("usize: {}", res)
-                // let msg_from_client = String::from_utf8_lossy(&bytes_vec);
-                // if msg_from_client.len() > 0 {
-                //     println!("Message: {} from addr: {}", msg_from_client, stream.peer_addr().unwrap());
-                // }
             },
             Err(e) => {
                 eprintln!("Some error occurred: {}", e.to_string());
                 break;
             }
-        };
+        }
     }
 }
 
 fn watch_clients(clients_vec: Arc<Mutex<Vec<Client>>>) {
-    let mut checks_counter = 0;
-    let mut threads_counter = 0;
-
     loop {
-        checks_counter += 1;
-
         let mut locked_clients_vec = clients_vec.lock().unwrap();
         if let Some(client) = locked_clients_vec.iter_mut().find(|c| c.is_thread_active == false) {
             client.is_thread_active = true;
             let client_stream_clone = client.stream.try_clone().unwrap();
 
-            threads_counter += 1;
             thread::spawn(move || watch_client_stream(client_stream_clone));
         }
-
-        // println!("Threads counter: {}", threads_counter);
-        // println!("Checks counter: {}", checks_counter);
     }
 }

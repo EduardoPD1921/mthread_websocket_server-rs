@@ -10,11 +10,10 @@ fn main() {
     let stdin = io::stdin();
 
     loop {
+        // TODO implement frames to dynamically allocate buffers on server side
         user_input.clear();
         stdin.read_line(&mut user_input).unwrap();
 
-        writeln!(stream, "{}", user_input).unwrap();
-        // stream.write_all(user_input.as_bytes()).unwrap();
-        // stream.flush().unwrap();
+        stream.write(user_input.as_bytes()).unwrap();
     }
 }
