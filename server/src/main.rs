@@ -1,9 +1,7 @@
-use std::io::{BufReader, BufRead};
+use std::io::{Write, BufReader, BufRead};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::sync::{Arc, Mutex};
-
-use serde::Deserialize;
 
 struct Client {
     stream: TcpStream,
@@ -14,11 +12,6 @@ impl Client {
     fn new(stream: TcpStream, is_thread_active: bool) -> Client {
         Client { stream, is_thread_active  }
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct Message {
-    data: Vec<u8>
 }
 
 static mut THREADS_COUNTER: i32 = 0;
@@ -74,16 +67,23 @@ fn watch_client_stream(stream: TcpStream, clients_vec: Arc<Mutex<Vec<Client>>>) 
                 break;
             },
             Ok(_) => {
-                let message: Message = serde_json::from_str(&message_string).unwrap();
-                let client_msg = String::from_utf8_lossy(&message.data);
-
-                println!("Message: {} from addr: {}", client_msg, stream.peer_addr().unwrap());
+                let clients_vec_clone = Arc::clone(&clients_vec);
+                write_to_all_sockets(message_string, clients_vec_clone);
             },
             Err(e) => {
                 eprintln!("Some error occurred: {}", e.to_string());
                 break;
             }
         }
+    }
+}
+
+fn write_to_all_sockets(message_string: String, clients_vec: Arc<Mutex<Vec<Client>>>) {
+    let mut locked_clients_vec = clients_vec.lock().unwrap();
+
+    // TODO don't write to origin socket
+    for client in locked_clients_vec.iter_mut() {
+        writeln!(client.stream, "{}", message_string).unwrap();
     }
 }
 
