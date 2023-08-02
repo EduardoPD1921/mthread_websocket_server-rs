@@ -68,7 +68,7 @@ fn watch_client_stream(stream: TcpStream, clients_vec: Arc<Mutex<Vec<Client>>>) 
             },
             Ok(_) => {
                 let clients_vec_clone = Arc::clone(&clients_vec);
-                write_to_all_sockets(message_string, clients_vec_clone);
+                write_to_all_sockets(message_string, stream.peer_addr().unwrap().to_string(), clients_vec_clone);
             },
             Err(e) => {
                 eprintln!("Some error occurred: {}", e.to_string());
@@ -78,12 +78,13 @@ fn watch_client_stream(stream: TcpStream, clients_vec: Arc<Mutex<Vec<Client>>>) 
     }
 }
 
-fn write_to_all_sockets(message_string: String, clients_vec: Arc<Mutex<Vec<Client>>>) {
+fn write_to_all_sockets(message_string: String, origin_address: String, clients_vec: Arc<Mutex<Vec<Client>>>) {
     let mut locked_clients_vec = clients_vec.lock().unwrap();
 
-    // TODO don't write to origin socket
     for client in locked_clients_vec.iter_mut() {
-        writeln!(client.stream, "{}", message_string).unwrap();
+        if client.stream.peer_addr().unwrap().to_string() != origin_address {
+            writeln!(client.stream, "{}", message_string).unwrap();
+        }
     }
 }
 

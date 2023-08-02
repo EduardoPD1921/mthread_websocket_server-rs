@@ -57,10 +57,13 @@ fn watch_server_messages(stream: TcpStream) {
                 continue;
             },
             Ok(_) => {
-                let message: Message = serde_json::from_str(&message_string).unwrap();
-                let client_msg = String::from_utf8_lossy(&message.data).to_string();
+                if message_string != "\n" {
+                    let message: Message = serde_json::from_str(&message_string).unwrap();
+                    let mut client_msg = String::from_utf8_lossy(&message.data).to_string();
+                    client_msg.pop();
 
-                println!("{}: {}", message.user_name, client_msg);
+                    println!("{}: {}", message.user_name, client_msg);
+                }
             },
             Err(_e) => {
                 // todo!();
