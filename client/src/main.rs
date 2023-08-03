@@ -1,157 +1,157 @@
 use std::net::TcpStream;
-use std::io::{self, Write, BufReader, BufRead};
+use std::io::{Write, BufReader, BufRead};
 use std::thread;
-use std::sync::{mpsc, Arc, Mutex, Condvar};
-use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc::{self, Sender, Receiver};
 use std::env;
 
 use serde::{Serialize, Deserialize};
-use pancurses::{initscr, noecho, Input};
+use pancurses::{initscr, noecho, Input, newwin, endwin};
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Message {
+struct SocketMessage {
     data: Vec<u8>,
-    user_name: String
+    username: String
 }
 
-impl Message {
-    fn new(data: Vec<u8>, user_name: String) -> Message {
-        Message { data, user_name }
+impl SocketMessage {
+    fn new(data: Vec<u8>, username: String) -> SocketMessage {
+        SocketMessage { data, username }
     }
 }
 
-enum NcurseActionType {
-    WriteClientMessage,
-    GetClientInput
+struct LocalMessage {
+    content: String,
+    username: Option<String>
 }
 
-struct NcurseAction {
-    action_type: NcurseActionType,
-    user_name: Option<String>,
-    data: Option<String>
-}
-
-impl NcurseAction {
-    fn new(action_type: NcurseActionType, user_name: Option<String>, data: Option<String>) -> NcurseAction {
-        NcurseAction { action_type, user_name, data }
+impl LocalMessage {
+    fn new(content: String, username: Option<String>) -> LocalMessage {
+        LocalMessage { content, username }
     }
 }
 
 fn main() {
     let addr = format!("127.0.0.1:{}", 3000);
-    let mut stream = TcpStream::connect(&addr).unwrap();
-    let stream_clone = stream.try_clone().unwrap();
-
-    let vec_args: Vec<String> = env::args().collect();
+    let stream = TcpStream::connect(&addr).unwrap();
+    let ti_thread_stream = stream.try_clone().unwrap();
 
     println!("Client connected. Addr: {}", stream.local_addr().unwrap());
 
-    let (tx, rx): (Sender<NcurseAction>, Receiver<NcurseAction>) = mpsc::channel();
-    let tx_thread = tx.clone();
+    let (tx, rx): (Sender<LocalMessage>, Receiver<LocalMessage>) = mpsc::channel();
+    let text_input_thread_tx = tx.clone();
+    let network_thread_tx = tx.clone();
 
-    let user_input_vec: Arc<(Mutex<Vec<char>>, Condvar)> = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
-    let user_input_vec_ncurse_thread = Arc::clone(&user_input_vec);
+    let main_window_size = get_main_window_size();
 
-    thread::spawn(move || ncurses_thread(rx, user_input_vec_ncurse_thread));
-    thread::spawn(move || watch_server_messages(stream_clone, tx_thread));
+    let ui_thread = thread::spawn(move || ui_thread(rx));
+    let text_input_thread = thread::spawn(move || text_input_thread(main_window_size, text_input_thread_tx, ti_thread_stream));
+    let network_thread = thread::spawn(move || watch_server_messages(stream, network_thread_tx));
+
+    network_thread.join().unwrap();
+    ui_thread.join().unwrap();
+    text_input_thread.join().unwrap();
+}
+
+fn ui_thread(thread_rx: Receiver<LocalMessage>) {
+    let ui_window = initscr();
+    noecho();
+    ui_window.keypad(true);
 
     loop {
-        let user_name = vec_args.get(1).unwrap().to_owned();
+        let local_message = thread_rx.recv().unwrap();
 
-        let get_client_input_action = NcurseAction::new(NcurseActionType::GetClientInput, None, None);
-        match tx.send(get_client_input_action) {
-            Ok(_) => {
-                let (lock, cvar) = &*user_input_vec;
-                let locked_user_input_vec = lock.lock().unwrap();
-                let locked_user_input_vec = cvar.wait(locked_user_input_vec).unwrap();
+        let username = match local_message.username {
+            Some(username) => username,
+            None => String::from("You")
+        };
 
-                let user_input_string = locked_user_input_vec.iter().collect::<String>();
+        let formatted_message = format!("{}: {}", username, local_message.content);
 
-                let data = user_input_string.as_bytes().to_vec();
-                let message = Message::new(data, user_name.clone());
+        ui_window.mv(ui_window.get_cur_y(), 0);
+        ui_window.addstr(formatted_message);
+        ui_window.addch('\n');
 
-                let serialized_message = serde_json::to_string(&message).unwrap();
-                writeln!(stream, "{}", serialized_message).unwrap();
-
-                let write_client_message_action = NcurseAction::new(NcurseActionType::WriteClientMessage, Some("You".to_string()), Some(user_input_string));
-                tx.send(write_client_message_action).unwrap();
-            },
-            Err(_e) => {}
-        }
+        ui_window.refresh();
     }
 }
 
-// TODO pass the user_input_vec through NcurseActionType
-fn ncurses_thread(thread_rx: Receiver<NcurseAction>, user_input_vec: Arc<(Mutex<Vec<char>>, Condvar)>) {
-    let window = initscr();
+fn text_input_thread(main_window_yx: (i32, i32), thread_tx: Sender<LocalMessage>, mut stream: TcpStream) {
+    let text_input_window_height = 1;
+    let text_input_window_width = main_window_yx.1;
+    let text_input_window_start = main_window_yx.0 - 1;
+
+    let text_input_window = newwin(text_input_window_height, text_input_window_width, text_input_window_start, 0);
+    text_input_window.keypad(true);
     noecho();
-    window.keypad(true);
+
+    let mut text_input_vec: Vec<char> = Vec::new();
 
     loop {
-        let ncurse_action = thread_rx.recv().unwrap();
-        match ncurse_action.action_type {
-            NcurseActionType::WriteClientMessage => {
-                let formatted_message = format!("{}: {}", ncurse_action.user_name.unwrap(), ncurse_action.data.unwrap());
-
-                window.mv(window.get_cur_y(), 0);
-                window.addstr(formatted_message);
-                window.addch('\n');
-            },
-            // TODO fix: this action is blocking the entire ncurse_thread
-            NcurseActionType::GetClientInput => {
-                let (lock, cvar) = &*user_input_vec;
-                let mut locked_user_input_vec = lock.lock().unwrap();
-                locked_user_input_vec.clear();
-
-                loop {
-                    let user_char = window.getch().unwrap();
-                    match user_char {
-                        Input::Character('\n') => {
-                            break;
-                        },
-                        Input::KeyBackspace => {
-                            window.mv(window.get_cur_y(), window.get_cur_x() - 1);
-                            window.delch();
-                            locked_user_input_vec.pop();
-                        },
-                        Input::Character(c) => {
-                            locked_user_input_vec.push(c);
-                            window.addch(c);
-                        },
-                        _ => {}
-                    }
-                }
-
-                cvar.notify_one();
+        loop {
+            match text_input_window.getch().unwrap() {
+                Input::Character('\n') => {
+                    text_input_window.deleteln();
+                    text_input_window.mv(0, 0);
+                    break;
+                },
+                Input::Character(c) => {
+                    text_input_vec.push(c);
+                    text_input_window.addch(c);
+                },
+                Input::KeyBackspace => {
+                    text_input_window.mv(text_input_window.get_cur_y(), text_input_window.get_cur_x() - 1);
+                    text_input_window.delch();
+                    text_input_vec.pop();
+                },
+                _ => {}
             }
         }
+
+        let vec_args: Vec<String> = env::args().collect();
+        let username = vec_args.get(1).unwrap();
+
+        let user_input_string = text_input_vec.iter().collect::<String>();
+        let user_input_bytes = user_input_string.as_bytes().to_vec();
+        text_input_vec.clear();
+
+        let socket_message = SocketMessage::new(user_input_bytes, username.to_string());
+        let serialized_socket_message = serde_json::to_string(&socket_message).unwrap();
+
+        let local_message = LocalMessage::new(user_input_string, None);
+
+        writeln!(stream, "{}", serialized_socket_message).unwrap();
+        thread_tx.send(local_message).unwrap();
     }
 }
 
-fn watch_server_messages(stream: TcpStream, tx_thread: Sender<NcurseAction>) {
+fn get_main_window_size() -> (i32, i32) {
+    let window = initscr();
+    let yx = window.get_max_yx();
+    endwin();
+
+    yx
+}
+
+fn watch_server_messages(stream: TcpStream, thread_tx: Sender<LocalMessage>) {
     loop {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut message_string: String = Default::default();
 
         match reader.read_line(&mut message_string) {
             Ok(0) => {
-                println!("Error 500");
-                // todo!();
-                continue;
+                todo!();
             },
             Ok(_) => {
                 if message_string != "\n" {
-                    let message: Message = serde_json::from_str(&message_string).unwrap();
-                    let mut client_msg = String::from_utf8_lossy(&message.data).to_string();
-                    client_msg.pop();
+                    let socket_message: SocketMessage = serde_json::from_str(&message_string).unwrap();
+                    let client_msg = String::from_utf8_lossy(&socket_message.data).to_string();
 
-                    let write_client_message_action = NcurseAction::new(NcurseActionType::WriteClientMessage, Some(message.user_name), Some(client_msg));
-                    tx_thread.send(write_client_message_action).unwrap();
+                    let local_message = LocalMessage::new(client_msg, Some(socket_message.username));
+                    thread_tx.send(local_message).unwrap();
                 }
             },
             Err(_e) => {
-                // todo!();
-                continue;
+                todo!();
             }
         }
     }
